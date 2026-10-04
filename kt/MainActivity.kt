@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Rect
@@ -18,33 +19,35 @@ import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : Activity() {
-    private val url = "https://sagrus.top/"
+    private val html = "<!DOCTYPE html><html><head>" +
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=8,user-scalable=yes\">" +
+        "<style>html,body{margin:0;height:100%;background:#000}iframe{display:block;border:0;width:100%;height:100%}</style></head><body>" +
+        "<iframe src=\"https://rtsp.ru/embed/TASDYYEA/\" allow=\"autoplay; fullscreen; encrypted-media; picture-in-picture\" allowfullscreen></iframe>" +
+        "</body></html>"
+
     private lateinit var web: WebView
     private lateinit var root: FrameLayout
     private lateinit var bar: View
-    private lateinit var fab: View
+    private lateinit var ovl: View
     private lateinit var btnRec: Button
+    private lateinit var ovRec: Button
     private var fullscreen = false
     private var customView: View? = null
     private var customCb: WebChromeClient.CustomViewCallback? = null
-
-    private val js = "var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m);}" +
-        "m.content='width=device-width,initial-scale=1,minimum-scale=0.5,maximum-scale=6,user-scalable=yes';"
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         setContentView(R.layout.activity_main)
         root = findViewById(R.id.root); web = findViewById(R.id.web); bar = findViewById(R.id.bar)
-        fab = findViewById(R.id.fab); btnRec = findViewById(R.id.btnRec)
+        ovl = findViewById(R.id.ovl); btnRec = findViewById(R.id.btnRec); ovRec = findViewById(R.id.ovRec)
         web.settings.apply {
             javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false
             setSupportZoom(true); builtInZoomControls = true; displayZoomControls = false
             useWideViewPort = true; loadWithOverviewMode = true
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         }
-        web.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(v: WebView, u: String?) { v.evaluateJavascript(js, null) }
-        }
+        web.setBackgroundColor(0xFF000000.toInt())
+        web.webViewClient = WebViewClient()
         web.webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(v: View, cb: CustomViewCallback) {
                 customView = v; customCb = cb
@@ -55,14 +58,19 @@ class MainActivity : Activity() {
                 customCb?.onCustomViewHidden(); customCb = null; setFullscreen(false)
             }
         }
-        web.loadUrl(url)
-        findViewById<View>(R.id.btnShot).setOnClickListener { screenshot() }
-        btnRec.setOnClickListener { toggleRec() }
-        findViewById<View>(R.id.btnZin).setOnClickListener { web.zoomIn() }
-        findViewById<View>(R.id.btnZout).setOnClickListener { web.zoomOut() }
-        findViewById<View>(R.id.btnFull).setOnClickListener { setFullscreen(true) }
-        fab.setOnClickListener { if (customView != null) web.webChromeClient?.onHideCustomView() else setFullscreen(false) }
-        findViewById<View>(R.id.btnExit).setOnClickListener { exitApp() }
+        web.loadDataWithBaseURL("https://sagrus.top/", html, "text/html", "utf-8", null)
+
+        click(R.id.btnShot, R.id.ovShot) { screenshot() }
+        click(R.id.btnRec, R.id.ovRec) { toggleRec() }
+        click(R.id.btnZin, R.id.ovZin) { web.zoomIn() }
+        click(R.id.btnZout, R.id.ovZout) { web.zoomOut() }
+        click(R.id.btnFull) { setFullscreen(true) }
+        click(R.id.ovFull) { if (customView != null) web.webChromeClient?.onHideCustomView() else setFullscreen(false) }
+        click(R.id.btnExit) { exitApp() }
+    }
+
+    private fun click(vararg ids: Int, f: () -> Unit) {
+        ids.forEach { findViewById<View>(it).setOnClickListener { f() } }
     }
 
     override fun onResume() {
@@ -76,18 +84,21 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java") override fun onBackPressed() {
         if (customView != null) web.webChromeClient?.onHideCustomView()
         else if (fullscreen) setFullscreen(false)
-        else toast("Для выхода нажмите ✖ Выход")
+        else toast("Для выхода нажмите ВЫХОД")
     }
 
     private fun showRec(on: Boolean) {
         btnRec.isActivated = on; btnRec.text = if (on) "⏹\nСтоп" else "⏺\nЗапись"
+        ovRec.isActivated = on; ovRec.text = if (on) "⏹" else "⏺"
+        requestedOrientation = if (on) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
 
     @Suppress("DEPRECATION")
     private fun setFullscreen(on: Boolean) {
         fullscreen = on
         bar.visibility = if (on) View.GONE else View.VISIBLE
-        fab.visibility = if (on) View.VISIBLE else View.GONE
+        ovl.visibility = if (on) View.VISIBLE else View.GONE
+        if (on) ovl.bringToFront()
         if (Build.VERSION.SDK_INT >= 30) {
             window.setDecorFitsSystemWindows(!on)
             window.insetsController?.let {
@@ -104,12 +115,19 @@ class MainActivity : Activity() {
     private fun stamp() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
     private fun screenshot() {
-        val loc = IntArray(2); web.getLocationInWindow(loc)
-        val r = Rect(loc[0], loc[1], loc[0] + web.width, loc[1] + web.height)
-        val bmp = Bitmap.createBitmap(r.width(), r.height(), Bitmap.Config.ARGB_8888)
-        PixelCopy.request(window, r, bmp, { res ->
-            if (res == PixelCopy.SUCCESS) saveBitmap(bmp) else toast("Не удалось сделать снимок")
-        }, Handler(Looper.getMainLooper()))
+        val wasOvl = ovl.visibility == View.VISIBLE
+        if (wasOvl) ovl.visibility = View.INVISIBLE
+        val h = Handler(Looper.getMainLooper())
+        h.postDelayed({
+            val loc = IntArray(2); web.getLocationInWindow(loc)
+            val r = Rect(loc[0], loc[1], loc[0] + web.width, loc[1] + web.height)
+            if (r.width() <= 0 || r.height() <= 0) { if (wasOvl) ovl.visibility = View.VISIBLE; return@postDelayed }
+            val bmp = Bitmap.createBitmap(r.width(), r.height(), Bitmap.Config.ARGB_8888)
+            PixelCopy.request(window, r, bmp, { res ->
+                if (wasOvl) ovl.visibility = View.VISIBLE
+                if (res == PixelCopy.SUCCESS) saveBitmap(bmp) else toast("Не удалось сделать снимок")
+            }, h)
+        }, 120)
     }
 
     private fun saveBitmap(bmp: Bitmap) {

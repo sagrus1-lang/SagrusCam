@@ -4,16 +4,31 @@
     <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
         <WebView android:id="@+id/web" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
         <LinearLayout android:id="@+id/bar" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:orientation="horizontal" android:background="#0F172A" android:padding="4dp">
-            <Button android:id="@+id/btnShot" style="@style/Btn" android:text="📷&#10;Снимок"/>
-            <Button android:id="@+id/btnRec" style="@style/Btn" android:text="⏺&#10;Запись"/>
-            <Button android:id="@+id/btnZin" style="@style/Btn" android:text="＋&#10;Zoom"/>
-            <Button android:id="@+id/btnZout" style="@style/Btn" android:text="－&#10;Zoom"/>
-            <Button android:id="@+id/btnFull" style="@style/Btn" android:text="⛶&#10;Экран"/>
-            <Button android:id="@+id/btnExit" style="@style/Btn" android:text="✖&#10;Выход"/>
+            android:orientation="vertical" android:background="#0F172A" android:padding="4dp">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <Button android:id="@+id/btnShot" style="@style/Btn" android:text="📷&#10;Снимок"/>
+                <Button android:id="@+id/btnRec" style="@style/Btn" android:text="⏺&#10;Запись"/>
+                <Button android:id="@+id/btnFull" style="@style/Btn" android:text="⛶&#10;Полный"/>
+                <LinearLayout android:layout_width="0dp" android:layout_height="56dp" android:layout_weight="1.3"
+                    android:layout_margin="3dp" android:orientation="vertical" android:gravity="center">
+                    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                        <Button android:id="@+id/btnZin" style="@style/BtnZ" android:text="＋"/>
+                        <Button android:id="@+id/btnZout" style="@style/BtnZ" android:text="－"/>
+                    </LinearLayout>
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:text="Zoom" android:textColor="#E2E8F0" android:textSize="11sp"/>
+                </LinearLayout>
+            </LinearLayout>
+            <Button android:id="@+id/btnExit" style="@style/ExitBtn" android:text="✕  ВЫХОД"/>
         </LinearLayout>
     </LinearLayout>
-    <TextView android:id="@+id/fab" android:layout_width="44dp" android:layout_height="44dp" android:layout_gravity="top|end"
-        android:layout_margin="12dp" android:background="@drawable/fab_bg" android:gravity="center" android:text="⤡"
-        android:textColor="#FFFFFF" android:textSize="22sp" android:alpha="0.6" android:visibility="gone"/>
+    <LinearLayout android:id="@+id/ovl" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="24dp"
+        android:orientation="horizontal" android:alpha="0.5" android:visibility="gone">
+        <Button android:id="@+id/ovShot" style="@style/Small" android:text="📷"/>
+        <Button android:id="@+id/ovRec" style="@style/Small" android:text="⏺"/>
+        <Button android:id="@+id/ovZin" style="@style/Small" android:text="＋"/>
+        <Button android:id="@+id/ovZout" style="@style/Small" android:text="－"/>
+        <Button android:id="@+id/ovFull" style="@style/Small" android:text="⤡"/>
+    </LinearLayout>
 </FrameLayout>
