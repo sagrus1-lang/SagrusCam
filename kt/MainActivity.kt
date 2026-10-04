@@ -6,11 +6,13 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.media.projection.MediaProjectionManager
 import android.os.*
 import android.provider.MediaStore
+import android.util.DisplayMetrics
 import android.view.*
 import android.view.PixelCopy
 import android.webkit.*
@@ -27,19 +29,24 @@ class MainActivity : Activity() {
 
     private lateinit var web: WebView
     private lateinit var root: FrameLayout
+    private lateinit var videoHost: FrameLayout
+    private lateinit var header: View
     private lateinit var bar: View
-    private lateinit var ovl: View
+    private lateinit var ovl: LinearLayout
     private lateinit var btnRec: Button
-    private lateinit var ovRec: Button
+    private lateinit var ovRec: ImageButton
     private var fullscreen = false
     private var customView: View? = null
     private var customCb: WebChromeClient.CustomViewCallback? = null
 
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         setContentView(R.layout.activity_main)
-        root = findViewById(R.id.root); web = findViewById(R.id.web); bar = findViewById(R.id.bar)
-        ovl = findViewById(R.id.ovl); btnRec = findViewById(R.id.btnRec); ovRec = findViewById(R.id.ovRec)
+        root = findViewById(R.id.root); web = findViewById(R.id.web); videoHost = findViewById(R.id.videoHost)
+        header = findViewById(R.id.header); bar = findViewById(R.id.bar); ovl = findViewById(R.id.ovl)
+        btnRec = findViewById(R.id.btnRec); ovRec = findViewById(R.id.ovRec)
         web.settings.apply {
             javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false
             setSupportZoom(true); builtInZoomControls = true; displayZoomControls = false
@@ -58,6 +65,18 @@ class MainActivity : Activity() {
                 customCb?.onCustomViewHidden(); customCb = null; setFullscreen(false)
             }
         }
+        // Окно видео всегда строго 16:9, чтобы запись и снимок брали только картинку
+        videoHost.addOnLayoutChangeListener { _, l, t, r, bt, _, _, _, _ ->
+            val hw = r - l; val hh = bt - t
+            if (hw > 0 && hh > 0) {
+                val w = minOf(hw, hh * 16 / 9); val h = w * 9 / 16
+                val lp = web.layoutParams as FrameLayout.LayoutParams
+                if (lp.width != w || lp.height != h) { lp.width = w; lp.height = h; lp.gravity = Gravity.CENTER; web.layoutParams = lp }
+            }
+        }
+        val upd = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> if (RecordService.recording) updateCrop() }
+        web.addOnLayoutChangeListener(upd); root.addOnLayoutChangeListener(upd)
+
         web.loadDataWithBaseURL("https://sagrus.top/", html, "text/html", "utf-8", null)
 
         click(R.id.btnShot, R.id.ovShot) { screenshot() }
@@ -67,10 +86,28 @@ class MainActivity : Activity() {
         click(R.id.btnFull) { setFullscreen(true) }
         click(R.id.ovFull) { if (customView != null) web.webChromeClient?.onHideCustomView() else setFullscreen(false) }
         click(R.id.btnExit) { exitApp() }
+        applyOverlay()
+        if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) setFullscreen(true)
     }
 
     private fun click(vararg ids: Int, f: () -> Unit) {
         ids.forEach { findViewById<View>(it).setOnClickListener { f() } }
+    }
+
+    override fun onConfigurationChanged(c: Configuration) {
+        super.onConfigurationChanged(c)
+        if (customView == null) setFullscreen(c.orientation == Configuration.ORIENTATION_LANDSCAPE)
+        applyOverlay()
+    }
+
+    /** Кнопки в полном экране: снизу (вертикально) или справа (горизонтально), чтобы не лезть на видео. */
+    private fun applyOverlay() {
+        val land = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        ovl.orientation = if (land) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        val lp = ovl.layoutParams as FrameLayout.LayoutParams
+        lp.gravity = if (land) Gravity.END or Gravity.CENTER_VERTICAL else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        lp.setMargins(0, 0, if (land) dp(8) else 0, if (land) 0 else dp(48))
+        ovl.layoutParams = lp
     }
 
     override fun onResume() {
@@ -88,14 +125,16 @@ class MainActivity : Activity() {
     }
 
     private fun showRec(on: Boolean) {
-        btnRec.isActivated = on; btnRec.text = if (on) "⏹\nСтоп" else "⏺\nЗапись"
-        ovRec.isActivated = on; ovRec.text = if (on) "⏹" else "⏺"
+        btnRec.isActivated = on; btnRec.text = if (on) "Стоп" else "Запись"
+        btnRec.setCompoundDrawablesWithIntrinsicBounds(0, if (on) R.drawable.ic_stop else R.drawable.ic_rec, 0, 0)
+        ovRec.isActivated = on; ovRec.setImageResource(if (on) R.drawable.ic_stop else R.drawable.ic_rec)
         requestedOrientation = if (on) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
 
     @Suppress("DEPRECATION")
     private fun setFullscreen(on: Boolean) {
         fullscreen = on
+        header.visibility = if (on) View.GONE else View.VISIBLE
         bar.visibility = if (on) View.GONE else View.VISIBLE
         ovl.visibility = if (on) View.VISIBLE else View.GONE
         if (on) ovl.bringToFront()
@@ -112,6 +151,29 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Прямоугольник с видео (screen=true: координаты экрана, false: координаты окна). */
+    private fun videoRect(screen: Boolean): Rect {
+        val loc = IntArray(2)
+        if (customView != null) {
+            if (screen) root.getLocationOnScreen(loc) else root.getLocationInWindow(loc)
+            val rw = root.width; val rh = root.height
+            val w = minOf(rw, rh * 16 / 9); val h = w * 9 / 16
+            val l = loc[0] + (rw - w) / 2; val t = loc[1] + (rh - h) / 2
+            return Rect(l, t, l + w, t + h)
+        }
+        if (screen) web.getLocationOnScreen(loc) else web.getLocationInWindow(loc)
+        return Rect(loc[0], loc[1], loc[0] + web.width, loc[1] + web.height)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun realSize(): DisplayMetrics { val dm = DisplayMetrics(); windowManager.defaultDisplay.getRealMetrics(dm); return dm }
+
+    private fun updateCrop() {
+        val dm = realSize(); val r = videoRect(true)
+        RecordService.crop = floatArrayOf(r.left.toFloat() / dm.widthPixels, r.top.toFloat() / dm.heightPixels,
+            r.right.toFloat() / dm.widthPixels, r.bottom.toFloat() / dm.heightPixels)
+    }
+
     private fun stamp() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
     private fun screenshot() {
@@ -119,8 +181,7 @@ class MainActivity : Activity() {
         if (wasOvl) ovl.visibility = View.INVISIBLE
         val h = Handler(Looper.getMainLooper())
         h.postDelayed({
-            val loc = IntArray(2); web.getLocationInWindow(loc)
-            val r = Rect(loc[0], loc[1], loc[0] + web.width, loc[1] + web.height)
+            val r = videoRect(false)
             if (r.width() <= 0 || r.height() <= 0) { if (wasOvl) ovl.visibility = View.VISIBLE; return@postDelayed }
             val bmp = Bitmap.createBitmap(r.width(), r.height(), Bitmap.Config.ARGB_8888)
             PixelCopy.request(window, r, bmp, { res ->
@@ -167,10 +228,15 @@ class MainActivity : Activity() {
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
         if (req == 1 && res == RESULT_OK && data != null) {
-            val v = window.decorView
+            val dm = realSize(); updateCrop()
+            val r = videoRect(true)
+            var ow = minOf(1920, r.width()) / 2 * 2
+            if (ow < 64) ow = 1280
+            val oh = (ow * 9 / 16) / 2 * 2
             startForegroundService(Intent(this, RecordService::class.java)
                 .putExtra(RecordService.EXTRA_CODE, res).putExtra(RecordService.EXTRA_DATA, data)
-                .putExtra("w", v.width).putExtra("h", v.height).putExtra("dpi", resources.displayMetrics.densityDpi))
+                .putExtra("sw", dm.widthPixels).putExtra("sh", dm.heightPixels)
+                .putExtra("ow", ow).putExtra("oh", oh).putExtra("dpi", dm.densityDpi))
         }
     }
 

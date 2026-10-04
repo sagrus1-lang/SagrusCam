@@ -17,6 +17,8 @@ class RecordService : Service() {
     companion object {
         const val ACTION_STOP = "stop"; const val EXTRA_CODE = "code"; const val EXTRA_DATA = "data"
         @Volatile var recording = false
+        /** Область видео на экране в долях [left, top, right, bottom]. */
+        @Volatile var crop = floatArrayOf(0f, 0f, 1f, 1f)
         var onState: ((Boolean) -> Unit)? = null
         private fun set(v: Boolean) { recording = v; onState?.invoke(v) }
     }
@@ -28,7 +30,7 @@ class RecordService : Service() {
     override fun onBind(i: Intent?): IBinder? = null
 
     override fun onStartCommand(i: Intent?, f: Int, s: Int): Int {
-        if (i?.action == ACTION_STOP) { stopRec(); stopSelf(); return START_NOT_STICKY }
+        if (i?.action == ACTION_STOP) { stopRec(false); stopSelf(); return START_NOT_STICKY }
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("rec", "Запись", NotificationManager.IMPORTANCE_LOW))
         val n = Notification.Builder(this, "rec").setSmallIcon(android.R.drawable.ic_btn_speak_now)
@@ -36,19 +38,21 @@ class RecordService : Service() {
         startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         @Suppress("DEPRECATION") val data = i?.getParcelableExtra<Intent>(EXTRA_DATA)
         if (i == null || data == null) { stopSelf(); return START_NOT_STICKY }
-        try { startRec(i.getIntExtra(EXTRA_CODE, 0), data, i.getIntExtra("w", 1280), i.getIntExtra("h", 720), i.getIntExtra("dpi", 320)) }
-        catch (e: Exception) { Toast.makeText(this, "Ошибка записи: ${e.message}", Toast.LENGTH_LONG).show(); stopRec(); stopSelf() }
+        try {
+            startRec(i.getIntExtra(EXTRA_CODE, 0), data, i.getIntExtra("sw", 1080), i.getIntExtra("sh", 1920),
+                i.getIntExtra("ow", 1280), i.getIntExtra("oh", 720), i.getIntExtra("dpi", 320))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Ошибка записи: ${e.message}", Toast.LENGTH_LONG).show(); stopRec(true); stopSelf()
+        }
         return START_NOT_STICKY
     }
 
-    private fun startRec(code: Int, data: Intent, w0: Int, h0: Int, dpi: Int) {
+    private fun startRec(code: Int, data: Intent, sw: Int, sh: Int, ow: Int, oh: Int, dpi: Int) {
         val p = getSystemService(MediaProjectionManager::class.java).getMediaProjection(code, data)
         proj = p
         p.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() { main.post { stopRec(); stopSelf() } }
+            override fun onStop() { main.post { stopRec(false); stopSelf() } }
         }, main)
-        val sc = minOf(1f, 1920f / maxOf(w0, h0))
-        val w = (w0 * sc).toInt() / 2 * 2; val h = (h0 * sc).toInt() / 2 * 2
         val cv = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "sagrus_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.mp4")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
@@ -56,17 +60,19 @@ class RecordService : Service() {
         }
         val u: Uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cv)!!
         val fd = contentResolver.openFileDescriptor(u, "rw")!!; pfd = fd
-        val r = ScreenRecorder(p, w, h, dpi, fd.fileDescriptor); r.start(); rec = r
+        val r = ScreenRecorder(p, sw, sh, ow, oh, dpi, fd.fileDescriptor) { crop }
+        rec = r; r.start()
         set(true)
     }
 
-    private fun stopRec() {
+    private fun stopRec(silent: Boolean) {
         val r = rec; rec = null
         val p = proj; proj = null
         r?.stop(); p?.stop()
         pfd?.close(); pfd = null
-        if (r != null) { set(false); Toast.makeText(this, "Видео сохранено: Movies/SagrusCam", Toast.LENGTH_LONG).show() }
+        if (recording) set(false)
+        if (r != null && !silent) Toast.makeText(this, "Видео сохранено: Movies/SagrusCam", Toast.LENGTH_LONG).show()
     }
 
-    override fun onDestroy() { stopRec(); super.onDestroy() }
+    override fun onDestroy() { stopRec(false); super.onDestroy() }
 }
