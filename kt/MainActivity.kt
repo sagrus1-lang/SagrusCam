@@ -6,7 +6,6 @@ import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.media.projection.MediaProjectionManager
@@ -30,23 +29,17 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var root: FrameLayout
     private lateinit var videoHost: FrameLayout
-    private lateinit var header: View
-    private lateinit var bar: View
-    private lateinit var ovl: LinearLayout
-    private lateinit var btnRec: Button
+    private lateinit var logo: View
+    private lateinit var ovl: View
     private lateinit var ovRec: ImageButton
-    private var fullscreen = false
     private var customView: View? = null
     private var customCb: WebChromeClient.CustomViewCallback? = null
-
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         setContentView(R.layout.activity_main)
         root = findViewById(R.id.root); web = findViewById(R.id.web); videoHost = findViewById(R.id.videoHost)
-        header = findViewById(R.id.header); bar = findViewById(R.id.bar); ovl = findViewById(R.id.ovl)
-        btnRec = findViewById(R.id.btnRec); ovRec = findViewById(R.id.ovRec)
+        logo = findViewById(R.id.logo); ovl = findViewById(R.id.ovl); ovRec = findViewById(R.id.ovRec)
         web.settings.apply {
             javaScriptEnabled = true; domStorageEnabled = true; mediaPlaybackRequiresUserGesture = false
             setSupportZoom(true); builtInZoomControls = true; displayZoomControls = false
@@ -58,11 +51,12 @@ class MainActivity : Activity() {
         web.webChromeClient = object : WebChromeClient() {
             override fun onShowCustomView(v: View, cb: CustomViewCallback) {
                 customView = v; customCb = cb
-                root.addView(v, FrameLayout.LayoutParams(-1, -1)); setFullscreen(true)
+                root.addView(v, FrameLayout.LayoutParams(-1, -1))
+                logo.bringToFront(); ovl.bringToFront()
             }
             override fun onHideCustomView() {
                 customView?.let { root.removeView(it) }; customView = null
-                customCb?.onCustomViewHidden(); customCb = null; setFullscreen(false)
+                customCb?.onCustomViewHidden(); customCb = null
             }
         }
         // Окно видео всегда строго 16:9, чтобы запись и снимок брали только картинку
@@ -79,75 +73,57 @@ class MainActivity : Activity() {
 
         web.loadDataWithBaseURL("https://sagrus.top/", html, "text/html", "utf-8", null)
 
-        click(R.id.btnShot, R.id.ovShot) { screenshot() }
-        click(R.id.btnRec, R.id.ovRec) { toggleRec() }
-        click(R.id.btnZin, R.id.ovZin) { web.zoomIn() }
-        click(R.id.btnZout, R.id.ovZout) { web.zoomOut() }
-        click(R.id.btnFull) { setFullscreen(true) }
-        click(R.id.ovFull) { if (customView != null) web.webChromeClient?.onHideCustomView() else setFullscreen(false) }
-        click(R.id.btnExit) { exitApp() }
-        applyOverlay()
-        if (resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) setFullscreen(true)
-    }
-
-    private fun click(vararg ids: Int, f: () -> Unit) {
-        ids.forEach { findViewById<View>(it).setOnClickListener { f() } }
-    }
-
-    override fun onConfigurationChanged(c: Configuration) {
-        super.onConfigurationChanged(c)
-        if (customView == null) setFullscreen(c.orientation == Configuration.ORIENTATION_LANDSCAPE)
-        applyOverlay()
-    }
-
-    /** Кнопки в полном экране: снизу (вертикально) или справа (горизонтально), чтобы не лезть на видео. */
-    private fun applyOverlay() {
-        val land = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        ovl.orientation = if (land) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-        val lp = ovl.layoutParams as FrameLayout.LayoutParams
-        lp.gravity = if (land) Gravity.END or Gravity.CENTER_VERTICAL else Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        lp.setMargins(0, 0, if (land) dp(8) else 0, if (land) 0 else dp(48))
-        ovl.layoutParams = lp
+        findViewById<View>(R.id.ovShot).setOnClickListener { screenshot() }
+        ovRec.setOnClickListener { toggleRec() }
+        findViewById<View>(R.id.ovZin).setOnClickListener { web.zoomIn() }
+        findViewById<View>(R.id.ovZout).setOnClickListener { web.zoomOut() }
+        findViewById<View>(R.id.ovClose).setOnClickListener { exitApp() }
+        immersive()
     }
 
     override fun onResume() {
         super.onResume()
         RecordService.onState = { rec -> runOnUiThread { showRec(rec) } }
         showRec(RecordService.recording)
+        immersive()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) immersive()
     }
 
     override fun onDestroy() { RecordService.onState = null; web.destroy(); super.onDestroy() }
 
     @Deprecated("Deprecated in Java") override fun onBackPressed() {
         if (customView != null) web.webChromeClient?.onHideCustomView()
-        else if (fullscreen) setFullscreen(false)
-        else toast("Для выхода нажмите ВЫХОД")
+        else toast("Для выхода нажмите ✕")
     }
 
     private fun showRec(on: Boolean) {
-        btnRec.isActivated = on; btnRec.text = if (on) "Стоп" else "Запись"
-        btnRec.setCompoundDrawablesWithIntrinsicBounds(0, if (on) R.drawable.ic_stop else R.drawable.ic_rec, 0, 0)
-        ovRec.isActivated = on; ovRec.setImageResource(if (on) R.drawable.ic_stop else R.drawable.ic_rec)
-        requestedOrientation = if (on) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        ovRec.isActivated = on
+        ovRec.setImageResource(if (on) R.drawable.ic_stop else R.drawable.ic_rec)
+        logo.visibility = if (on) View.INVISIBLE else View.VISIBLE      // логотип не попадает в запись
+        requestedOrientation = if (on) ActivityInfo.SCREEN_ORIENTATION_LOCKED else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
 
+    /** Всегда полный экран без системных панелей. */
     @Suppress("DEPRECATION")
-    private fun setFullscreen(on: Boolean) {
-        fullscreen = on
-        header.visibility = if (on) View.GONE else View.VISIBLE
-        bar.visibility = if (on) View.GONE else View.VISIBLE
-        ovl.visibility = if (on) View.VISIBLE else View.GONE
-        if (on) ovl.bringToFront()
+    private fun immersive() {
+        if (Build.VERSION.SDK_INT >= 28) {
+            val lp = window.attributes
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            window.attributes = lp
+        }
         if (Build.VERSION.SDK_INT >= 30) {
-            window.setDecorFitsSystemWindows(!on)
+            window.setDecorFitsSystemWindows(false)
             window.insetsController?.let {
-                if (on) { it.hide(WindowInsets.Type.systemBars())
-                    it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                } else it.show(WindowInsets.Type.systemBars())
+                it.hide(WindowInsets.Type.systemBars())
+                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
         } else {
-            window.decorView.systemUiVisibility = if (on) View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION else 0
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         }
     }
 
@@ -176,16 +152,20 @@ class MainActivity : Activity() {
 
     private fun stamp() = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
 
+    private fun restoreOverlays() {
+        ovl.visibility = View.VISIBLE
+        logo.visibility = if (RecordService.recording) View.INVISIBLE else View.VISIBLE
+    }
+
     private fun screenshot() {
-        val wasOvl = ovl.visibility == View.VISIBLE
-        if (wasOvl) ovl.visibility = View.INVISIBLE
+        ovl.visibility = View.INVISIBLE; logo.visibility = View.INVISIBLE   // на снимке только видео
         val h = Handler(Looper.getMainLooper())
         h.postDelayed({
             val r = videoRect(false)
-            if (r.width() <= 0 || r.height() <= 0) { if (wasOvl) ovl.visibility = View.VISIBLE; return@postDelayed }
+            if (r.width() <= 0 || r.height() <= 0) { restoreOverlays(); return@postDelayed }
             val bmp = Bitmap.createBitmap(r.width(), r.height(), Bitmap.Config.ARGB_8888)
             PixelCopy.request(window, r, bmp, { res ->
-                if (wasOvl) ovl.visibility = View.VISIBLE
+                restoreOverlays()
                 if (res == PixelCopy.SUCCESS) saveBitmap(bmp) else toast("Не удалось сделать снимок")
             }, h)
         }, 120)
@@ -230,7 +210,7 @@ class MainActivity : Activity() {
         if (req == 1 && res == RESULT_OK && data != null) {
             val dm = realSize(); updateCrop()
             val r = videoRect(true)
-            // Только стандартные размеры кадра: 1920x1080 или 1280x720 (нестандартные, вроде 1080x606, ломают кодек на части телефонов)
+            // Только стандартные размеры кадра: 1920x1080 или 1280x720
             val big = r.width() >= 1500
             val ow = if (big) 1920 else 1280
             val oh = if (big) 1080 else 720
