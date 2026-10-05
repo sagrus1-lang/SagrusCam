@@ -60,7 +60,9 @@ class RecordService : Service() {
         }
         val u: Uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, cv)!!
         val fd = contentResolver.openFileDescriptor(u, "rw")!!; pfd = fd
-        val r = ScreenRecorder(p, sw, sh, ow, oh, dpi, fd.fileDescriptor) { crop }
+        val r = ScreenRecorder(p, sw, sh, ow, oh, dpi, fd.fileDescriptor, { msg ->
+            main.post { Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); stopRec(true); stopSelf() }
+        }) { crop }
         rec = r; r.start()
         set(true)
     }

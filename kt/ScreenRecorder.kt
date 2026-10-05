@@ -21,7 +21,8 @@ import kotlin.concurrent.thread
  */
 class ScreenRecorder(private val proj: MediaProjection, private val srcW: Int, private val srcH: Int,
                      private val outW: Int, private val outH: Int, private val dpi: Int,
-                     private val fd: FileDescriptor, private val crop: () -> FloatArray) {
+                     private val fd: FileDescriptor, private val onError: (String) -> Unit,
+                     private val crop: () -> FloatArray) {
     private val lock = Object()
     private val frameLock = Object()
     private var frames = 0
@@ -43,7 +44,7 @@ class ScreenRecorder(private val proj: MediaProjection, private val srcW: Int, p
         muxer = MediaMuxer(fd, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         val vf = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outW, outH).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, 6_000_000); setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+            setInteger(MediaFormat.KEY_BIT_RATE, if (outW >= 1920) 8_000_000 else 5_000_000); setInteger(MediaFormat.KEY_FRAME_RATE, 30)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
         }
         val ve = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC); vEnc = ve
@@ -140,31 +141,39 @@ class ScreenRecorder(private val proj: MediaProjection, private val srcW: Int, p
             vb.put(floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)); vb.position(0)
             val tb = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder()).asFloatBuffer()
             val mat = FloatArray(16)
+            var haveFrame = false; var lastDraw = 0L; var fails = 0
             while (running) {
                 var got = false
                 synchronized(frameLock) {
-                    if (frames == 0) frameLock.wait(100)
+                    if (frames == 0) frameLock.wait(50)
                     if (frames > 0) { frames = 0; got = true }
                 }
-                if (!got) continue
-                s.updateTexImage(); s.getTransformMatrix(mat)
-                val c = crop()
-                if (c[2] <= c[0] || c[3] <= c[1]) continue
-                tb.clear(); tb.put(floatArrayOf(c[0], 1f - c[3], c[2], 1f - c[3], c[0], 1f - c[1], c[2], 1f - c[1])); tb.position(0)
-                GLES20.glViewport(0, 0, outW, outH)
-                GLES20.glClearColor(0f, 0f, 0f, 1f); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
-                GLES20.glUseProgram(prog)
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex[0])
-                GLES20.glUniformMatrix4fv(uST, 1, false, mat, 0)
-                GLES20.glEnableVertexAttribArray(aPos); GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 8, vb)
-                GLES20.glEnableVertexAttribArray(aTex); GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 8, tb)
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-                EGLExt.eglPresentationTimeANDROID(dpy, esurf, s.timestamp)
-                EGL14.eglSwapBuffers(dpy, esurf)
+                try {
+                    if (got) { s.updateTexImage(); s.getTransformMatrix(mat); haveFrame = true }
+                    else if (!haveFrame || System.nanoTime() - lastDraw < 100_000_000L) continue   // повтор кадра минимум 10 раз/с
+                    val c = crop()
+                    if (c[2] <= c[0] || c[3] <= c[1]) continue
+                    tb.clear(); tb.put(floatArrayOf(c[0], 1f - c[3], c[2], 1f - c[3], c[0], 1f - c[1], c[2], 1f - c[1])); tb.position(0)
+                    GLES20.glViewport(0, 0, outW, outH)
+                    GLES20.glClearColor(0f, 0f, 0f, 1f); GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+                    GLES20.glUseProgram(prog)
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, tex[0])
+                    GLES20.glUniformMatrix4fv(uST, 1, false, mat, 0)
+                    GLES20.glEnableVertexAttribArray(aPos); GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 8, vb)
+                    GLES20.glEnableVertexAttribArray(aTex); GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 8, tb)
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                    // время кадра берём из того же таймера, что и у звука, — рассинхрона и "замёрзшей" картинки не будет
+                    EGLExt.eglPresentationTimeANDROID(dpy, esurf, System.nanoTime())
+                    EGL14.eglSwapBuffers(dpy, esurf)
+                    lastDraw = System.nanoTime(); fails = 0
+                } catch (e: Exception) {
+                    if (++fails >= 10) throw e
+                }
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            onError("Сбой видео: ${e.javaClass.simpleName} ${e.message ?: ""}")
         } finally {
             ready.countDown()
             try { st?.release() } catch (_: Exception) {}

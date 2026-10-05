@@ -230,9 +230,10 @@ class MainActivity : Activity() {
         if (req == 1 && res == RESULT_OK && data != null) {
             val dm = realSize(); updateCrop()
             val r = videoRect(true)
-            var ow = minOf(1920, r.width()) / 2 * 2
-            if (ow < 64) ow = 1280
-            val oh = (ow * 9 / 16) / 2 * 2
+            // Только стандартные размеры кадра: 1920x1080 или 1280x720 (нестандартные, вроде 1080x606, ломают кодек на части телефонов)
+            val big = r.width() >= 1500
+            val ow = if (big) 1920 else 1280
+            val oh = if (big) 1080 else 720
             startForegroundService(Intent(this, RecordService::class.java)
                 .putExtra(RecordService.EXTRA_CODE, res).putExtra(RecordService.EXTRA_DATA, data)
                 .putExtra("sw", dm.widthPixels).putExtra("sh", dm.heightPixels)
